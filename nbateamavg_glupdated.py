@@ -1,10 +1,21 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Dec 27 00:07:33 2020
+
+@author: g
+"""
+
 import pandas as pd
 import numpy as np
 
-from nba_api.stats.endpoints import leaguegamefinder
-df = leaguegamefinder.LeagueGameFinder(game_id_nullable='0012000044').get_data_frames()[0]
+df = pd.read_csv('nbateamgames.csv')
 
-dtg=df.groupby("TEAM_ID")
+
+from nba_api.stats.endpoints import leaguegamefinder
+df2 = leaguegamefinder.LeagueGameFinder(game_id_nullable='0012000044').get_data_frames()[0]
+
+dtg=df2.groupby("TEAM_ID")
 tm_gm=[group for _, group in dtg]
 
 tl = []
@@ -16,7 +27,6 @@ for i in tm_gm:
 tm1 = tl[0]
 
 
-#x from leaguegamelog
 def team_avg_logs(x):
     tm=x
     
@@ -45,8 +55,15 @@ def team_avg_logs(x):
 
 
     return r.round(2)
-    
-    
-    l=team_avg_logs(tm1)
 
+
+
+
+t = []
+
+for i in tl:
+    t.append(team_avg_logs(i))
     
+rt = pd.concat(t)
+
+rth = rt.head()
