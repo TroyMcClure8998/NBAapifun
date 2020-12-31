@@ -1,5 +1,29 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Dec 31 04:07:15 2020
+
+@author: g
+"""
+import pandas as pd
+import numpy as np
 
 n = '0012000032'
+
+from nba_api.stats.endpoints import leaguegamefinder
+df = leaguegamefinder.LeagueGameFinder(game_id_nullable='0012000044').get_data_frames()[0]
+dfh = df.tail(15000)
+
+dfh = dfh.head(100)
+
+
+gms = df['GAME_ID'].tolist()
+gm_ids = sorted(list(set(gms)))
+
+dtg=df.groupby("GAME_ID")
+tm_gm=[group for _, group in dtg]
+
+
 
 def pl_tm(gameid):
     from nba_api.stats.endpoints import boxscorefourfactorsv2
@@ -66,8 +90,45 @@ def pl_tm(gameid):
     return dt
     
   
-dt = pl_tm(n)
+lt = []    
+errs = []  
 
-dta2 = dt[1]
+n = 0
+
+e = 0
+
+t = 0
+for i in gm_ids:
+    try:
+        dt = pl_tm(i)
+        lt.append(dt)
+        print([n,'try'])
+        n = n + 1
+    except:
+        errs.append(i)
+        print(e,'errs')
+        e = e + 1
+        pass
+    t = t + 1
+    print([n,e,t])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
