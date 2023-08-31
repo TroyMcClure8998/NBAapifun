@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Jul 22 19:29:03 2023
+
+@author: g
+"""
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Jul 22 18:20:04 2023
+
+@author: g
+"""
+
+import requests
+import pandas as pd
+import json
+import numpy as np
+
+
+
+def game_logs(season):
+    # season: '2022-23'
+    
+    url = 'https://stats.nba.com/stats/leaguegamelog'
+    headers= {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36', 'Referer': 'https://www.nba.com/'}
+    payload = {
+        'Counter': '1000',
+        'DateFrom': '',
+        'DateTo': '',
+        'Direction': 'DESC',
+        'LeagueID': '00',
+        'PlayerOrTeam': 'T',
+        'Season': season,
+        'SeasonType': 'Regular Season',
+        'Sorter': 'DATE'}
+    
+    jsonData = requests.get(url, headers=headers, params=payload).json()
+    
+    rows = jsonData['resultSets'][0]['rowSet']
+    columns = jsonData['resultSets'][0]['headers']
+    
+    df = pd.DataFrame(rows, columns=columns)
+    
+    df['DATE'] = pd.to_datetime(df['GAME_DATE'])
+    df['bookie_date'] = df['DATE'].dt.strftime('%Y%m%d')
+    df['home'] = np.where(df['MATCHUP'].str.contains('@'), 0, 1)
+    del df['SEASON_ID']
+    
+    df['bet_date_id'] = df['TEAM_ABBREVIATION'] + df['bookie_date']
+    
+    return df
+
+
+tm = game_logs('2022-23')    
+
+game_id_dic =  dict(zip(tm.bet_date_id, tm.GAME_ID))
+
+
+
+tm['Wins'] = tm['WL'].apply(lambda x: 1 if x == 'W' else 0)
+
+tm = tm.sort_values(by='GAME_DATE', ascending=True)
+
+
+tm['Win_Percent'] = tm.groupby('TEAM_ID')['Wins'].expanding().mean().reset_index(level=0, drop=True).groupby(tm['TEAM_ID']).shift()
+
+
+
+tm.to_csv('nba_game_2022-23.csv', index=False)
+
+
+
+# Group the DataFrame based on 'group_column'
+grouped = tm.groupby('GAME_ID')
+
+# Create a list of DataFrames, one for each group
+grouped_dataframes = [group for _, group in grouped]
+
+tm1 = grouped_dataframes[0]
+
+
+##
+
+tm1 = tm1.sort_values(by='home', ascending=False)
+tm1 = tm1.assign(**{f'away_{column}': value for column, value in tm1.iloc[1].items()})
+tm1 = tm1.head(1).reset_index(drop= True)
+
+
+# Step 1: transpose the DataFrame to compare columns instead of rows
+tm1_transpose = tm1.T
+
+# Step 2: Use the 'duplicated()' function to find duplicate columns (similar values)
+duplicate_columns = tm1_transpose[tm1_transpose.duplicated()]
+
+# Step 3: Drop the duplicate columns from the original DataFrame
+tm1 = tm1.drop(columns=duplicate_columns.index)
+
+
+
+home_games = []
+
+
+for i in grouped_dataframes:
+
+    ##
+
+    tm1 = i.sort_values(by='home', ascending=False).reset_index(drop= True)
+    tm1 = tm1.assign(**{f'away_{column}': value for column, value in tm1.iloc[1].items()})
+    tm1 = tm1.head(1).reset_index(drop= True)
+
+
+    # Step 1: transpose the DataFrame to compare columns instead of rows
+    tm1_transpose = tm1.T
+
+    # Step 2: Use the 'duplicated()' function to find duplicate columns (similar values)
+    duplicate_columns = tm1_transpose[tm1_transpose.duplicated()]
+
+    # Step 3: Drop the duplicate columns from the original DataFrame
+    tm1 = tm1.drop(columns=duplicate_columns.index)
+    
+    home_games.append(tm1)
+    
+nba_games = pd.concat(home_games)
+
+bookie_dates = nba_games['bookie_date'].tolist()
+
+list(nba_games)
+
+game_ids = list(set(nba_games['GAME_ID'].tolist()))
+
+# drop duplicates 
+
+bookie_dates = list(set(bookie_dates))
+
+
+# get betting date 
+
+def book_odds(date):
+    
+    '''
+    date => eg;20221018
+    '''
+    
+    url = 'https://api.actionnetwork.com/web/v1/scoreboard/nba?bookIds=15,30,76,75,123,69,68,972,71,247,79&date=' + date
+    
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:101.0) Gecko/20100101 Firefox/101.0'}
+    
+    r = requests.get(url, headers=headers)
+
+    tb = json.loads(r.content.decode('utf-8'))
+    
+    games = tb['games']
+    
+    game_odds = []
+    
+    for i in games:
+        odds = i['odds']
+        
+        dfs = []
+        
+        for o in odds:
+            dfs.append(pd.DataFrame([o]))
+        df = pd.concat(dfs)    
+        
+        t1 = pd.DataFrame([i['teams'][0]])
+        t2 = pd.DataFrame([i['teams'][1]])
+    
+        t1 = t1[['id','full_name','display_name','short_name','location','abbr', 'standings']].add_suffix('_home')
+        t2 = t2[['id','full_name','display_name','short_name','location','abbr', 'standings']].add_suffix('_away')
+        
+        t = pd.concat([t1,t2], axis = 1)
+        dt =pd.concat([t,df], axis = 1)
+        
+        game_odds.append(dt)    
+        
+    df = pd.concat(game_odds)      
+    
+    book_ids = {15:'open', 30: 'best odds', 76:'Pointsbet',75:'betmgm',  123:'caesars', 69:'fanduel', 68:'draftking', 972:'betrivers', 71: 'playsugarhouse', 274:'unibet', 79: 'bet365' }
+    
+    df['bookie'] = df['book_id'].map(book_ids)
+    
+    df['bookie_date'] = date
+    
+    df['bet_date_id'] = df['abbr_home'] +  df['bookie_date']
+
+    return df  
+
+nba_game_odds = []
+
+# List to store notes about errors
+error_notes = []
+
+n = 0
+# For loop to process each element in the list
+for i in bookie_dates:
+    try:
+        # Attempt some operation that might raise an error
+        nba_game_odds.append(book_odds(i))  # This will raise a ValueError for non-integer elements
+
+        # Your additional processing code here (if needed)
+        # ...
+
+    except ValueError as e:
+        # If an error occurs, catch it, add a note, and continue to the next element
+        error_notes.append(i)
+        continue
+    n = n + 1
+    print(n)
+    # Your code for handling non-error cases here (if needed)
+    # ...
+
+game_odds = pd.concat(nba_game_odds)
+
+game_odds.to_csv('nba_bet_odds.csv', index=False)
+
+btf = game_odds[game_odds['type'] == 'game']
+btf = btf[btf['book_id'] == 30]
+
+
+
+btf['GAME_ID'] = btf['bet_date_id'].map(game_id_dic)
+
+btf_game_ids = btf['GAME_ID'].tolist()
+
+
+
+btf.to_csv('nba_best_odds.csv', index=False)
+nba_games.to_csv('nba_games_2022-23.csv', index=False)
+
+
+# Group the DataFrame based on 'group_column'
+grouped = nba_games.groupby('GAME_ID')
+
+# Create a list of DataFrames, one for each group
+grouped_dataframes = [group for _, group in grouped]
+
+
+i = grouped_dataframes[1]
+
+
+bet_dt = btf[btf['bet_date_id'] == i['bet_date_id'][0]]
+
+dfh = nba_games.head()
+
+list(dfh)
+
+nba_games['home_date_id'] = nba_games['TEAM_ABBREVIATION'] + nba_games['bookie_date']
+nba_games['away_date_id'] = nba_games['away_TEAM_ABBREVIATION'] + nba_games['bookie_date']
+
+btf['home_date_id'] = btf['abbr_home'] +  btf['bookie_date']
+btf['away_date_id'] = btf['abbr_away'] +  btf['bookie_date']
+
+
+"put but home_date_id and away_date_id into a list"
+
+
+home_game_list = btf['home_date_id'].tolist()
+away_game_list = btf['away_date_id'].tolist()
+
+
+away_gm = []
+
+home_gm = []
+
+for i in home_game_list:
+    
+    # print(i)
+    # bet_dt = btf[btf['home_date_id'] == i['home_date_id'][0]]
+    
+    
+    # btm = pd.merge(i, bet_dt, on='home_date_id', how='inner')
+    # games.append(btm)
+    bet_dt2 = btf[btf['home_date_id'] == i]
+    
+    nba_away_gm = nba_games[nba_games['home_date_id'] == i]
+    
+    
+    
+    btm2 = pd.merge(nba_away_gm, bet_dt2, on='home_date_id', how='inner')
+    home_gm.append(btm2) 
+
+
+away_games = pd.concat(away_gm)
+home_games = pd.concat(home_gm)
+
+
+for i in range(45):
+    print()
+
+
+
+
+
+
+list(btf)
+
+# Group the DataFrame based on 'group_column'
+grouped = nba_games.groupby('GAME_ID')
+
+# Create a list of DataFrames, one for each group
+grouped_dataframes = [group for _, group in grouped]
+
+
+#614
+#home_game_id_dic = dict(zip(df['column1'], nba_games['GAME_ID']))
+
+list(nba_games)
+
+g1 = grouped_dataframes[0]
+
+
+
+
+
+games = []
+
+empty = []
+
+away_gm = []
+
+for i in grouped_dataframes:
+    # bet_dt = btf[btf['home_date_id'] == i['home_date_id'][0]]
+    
+    
+    # btm = pd.merge(i, bet_dt, on='home_date_id', how='inner')
+    # games.append(btm)
+    bet_dt2 = btf[btf['away_date_id'] == i['away_date_id'][0]]
+    btm2 = pd.merge(i, bet_dt2, on='away_date_id', how='inner')
+    games.append(btm2) 
+    
+    if len(btm2) == 0:
+        bet_dt = btf[btf['away_date_id'] == i['away_date_id'][0]]
+        btm = pd.merge(i, bet_dt, on='away_date_id', how='inner')
+        away_gm.append(btm) 
+        #games.append(btm)
+        print(len(btm))
+            
+        empty.append(i['bet_date_id'][0])
+
+
+gt = pd.concat(games)
+aw = pd.concat(away_gm)
+
+g2 = btf[btf['home_date_id'] == 'GSW20230409']
+
+
+g2 = gt[gt['home_date_id_y'] == 'GSW20230409']
+
+list(gt)
+
+
+list(btf)
+
+
+'GSW20221018'
+
+
+
+
+
+
+
+
+
+list(btf)
+
+
+
+#home_game_id_dic = dict(zip(df['column1'], nba_games['GAME_ID']))
+
+list(nba_games)
+
+games = []
+
+empty = []
+
+for i in grouped_dataframes:
+    bet_dt = btf[btf['bet_date_id'] == i['bet_date_id'][0]]
+    btm = pd.merge(i, bet_dt, on='bet_date_id', how='inner')
+    games.append(btm)
+    
+    if len(btm) == 0:
+        # btf['bet_date_id'] = btf['abbr_away'] +  btf['bookie_date']
+        
+        # bet_dt = btf[btf['bet_date_id'] == i['bet_date_id'][0]]
+        # btm = pd.merge(i, bet_dt, on='bet_date_id', how='inner')
+        # games.append(btm)        
+        
+        empty.append(i['bet_date_id'][0])
+
+
+gt = pd.concat(games)
+
+
+bt = book_odds(tm1['bookie_date'][0])
+
+btf = bt[bt['type'] == 'game']
+btf = btf[btf['book_id'] == 30]
+
+
+btf = btf[btf['bet_date_id'] == tm1['bet_date_id'][0]]
+
+
+dtm = pd.merge(tm1, btf, on='bet_date_id', how='inner')
+
+
+
+
+em = empty[0]
+
+list(em)
+'20221018'
+
+
+bet_dt = btf[btf['bookie_date'] == em['bookie_date'][0]]
+bet_dt2 = btf[btf['bet_date_id'] =='GSW20221018']
+
+emt = book_odds('20221018')
+
+### MAP GAME_ID TO BET_DF, 
+
+
+
+
+'GSW20221018'
+
+
+
+
+
+
+
+
+
